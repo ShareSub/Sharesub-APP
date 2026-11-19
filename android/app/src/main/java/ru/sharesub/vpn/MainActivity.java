@@ -362,7 +362,7 @@ public class MainActivity extends Activity {
             connection.setInstanceFollowRedirects(false);
             connection.setConnectTimeout(6500);
             connection.setReadTimeout(8000);
-            connection.setRequestProperty("User-Agent", "ShareSub/1.2.1 (Android)");
+            connection.setRequestProperty("User-Agent", "ShareSub/" + getString(R.string.app_version) + " (Android)");
             connection.setRequestProperty("Accept", "text/plain, application/json, */*");
             if (address.getProtocol().equals("https") && (providerOrigin.equals(origin(address)) || (fromShareSub && isShareSub(address)))) {
                 connection.setRequestProperty("X-HWID", hwid);

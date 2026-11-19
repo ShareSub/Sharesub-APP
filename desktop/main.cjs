@@ -1,24 +1,47 @@
-const { app, BrowserWindow, clipboard, ipcMain, net, powerMonitor, protocol, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, net, powerMonitor, protocol, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
+const { appendFileSync, mkdirSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const socket = require('node:net');
 const { pathToFileURL } = require('node:url');
 const createUpdater = require('./updates.cjs');
+const settingsStore = require('./settings.cjs');
 
 const MAX_BODY = 8 * 1024 * 1024;
 const origin = 'sharesub://app';
 const uiPath = path.join(__dirname, '..', 'app');
-const settingsPath = () => path.join(app.getPath('userData'), 'subscriptions.json');
+if (!app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) {
+  const developmentProfile = path.join(app.getPath('appData'), 'ShareSub Development');
+  mkdirSync(developmentProfile, { recursive: true });
+  app.setPath('userData', developmentProfile);
+}
+const profile = app.getPath('userData');
 const isShareSub = (host) => host === 'sharesub.ru' || host.endsWith('.sharesub.ru');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-let window, settings, session, quitting = false, lastError;
+let window, session, quitting = false, lastError;
 let pendingLink = process.argv.find(isImportLink) || '';
 let lastPowerQuery = 0, batteryRate = null;
-let settingsWrites = Promise.resolve();
 const updater = createUpdater(app, async () => { if (session) await disconnect(); });
+const { get: getSettings, update: updateSettings } = settingsStore(profile);
+
+function startupLog(event, detail = '') {
+  try { appendFileSync(path.join(profile, 'startup.log'), new Date().toISOString() + ' ' + event + ' ' + detail + '\n'); }
+  catch { /* The profile may be unavailable. */ }
+}
+
+if (process.platform === 'win32') {
+  // Keep Electron's disposable cache out of the roaming settings profile.
+  const cacheId = crypto.createHash('sha256').update(profile.toLowerCase()).digest('hex').slice(0, 16);
+  const local = process.env.LOCALAPPDATA || app.getPath('temp');
+  const cache = path.join(local, 'ShareSub', 'browser-v2', cacheId);
+  try {
+    mkdirSync(cache, { recursive: true });
+    app.setPath('sessionData', cache);
+  } catch (error) { startupLog('cache', error.code); }
+}
 
 function isImportLink(value) {
   return typeof value === 'string' && /^sharesub:\/\/(?:import|add)(?=[/?#]|$)/i.test(value) && value.length <= 32768;
@@ -67,31 +90,6 @@ if($rate -gt 0 -and $full -gt 0 -and $rate -lt 1000000){[Console]::WriteLine(($r
 protocol.registerSchemesAsPrivileged([{ scheme: 'sharesub', privileges: {
   standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, codeCache: true,
 } }]);
-
-async function writeSettings(value) {
-  const file = settingsPath();
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = file + '.tmp';
-  await fs.writeFile(temporary, JSON.stringify(value), { mode: 0o600, flush: true });
-  await fs.rename(temporary, file);
-  settings = value;
-}
-
-async function getSettings() {
-  if (settings) return settings;
-  const data = await fs.readFile(settingsPath(), 'utf8').then(JSON.parse).catch(() => ({}));
-  const id = typeof data.id === 'string' && /^[a-f0-9-]{36}$/i.test(data.id) ? data.id : crypto.randomUUID();
-  await writeSettings({ id, sources: Array.isArray(data.sources) ? data.sources.filter(s => typeof s === 'string') : [],
-    grouped: Boolean(data.grouped), automatic: data.automatic !== false, theme: data.theme === 'dark' ? 'dark' : 'light',
-    showMemory: data.showMemory !== false, showBattery: data.showBattery !== false });
-  return settings;
-}
-
-function updateSettings(fields) {
-  const write = settingsWrites.then(async () => writeSettings({ ...await getSettings(), ...fields }));
-  settingsWrites = write.catch(() => {});
-  return write;
-}
 
 async function download(input) {
   const options = await getSettings();
@@ -208,14 +206,27 @@ async function connect({ name, config }) {
   try {
     await fs.writeFile(path.join(directory, 'config.json'), JSON.stringify(config), { mode: 0o600 });
     const command = '& ' + [script, binary, directory, process.pid].map(quote).join(' ');
-    const elevation = `try {
-      Start-Process -FilePath ${quote(powershell)} -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','${encodeCommand(command)}') -Verb RunAs -WindowStyle Hidden -ErrorAction Stop
-    } catch { exit 1223 }`;
-    const launcher = spawn(powershell, ['-NoProfile', '-EncodedCommand', encodeCommand(elevation)], { windowsHide: true, stdio: 'ignore' });
-    const code = await childResult(launcher);
-    if (code === 1223) throw new Error('Для системного VPN нужно подтвердить запрос Windows.');
-    if (code !== 0) throw new Error(winError);
-    launched = true;
+    let tunnelExit;
+    if (app.isPackaged) {
+      // The installed executable is elevated by its Windows application manifest.
+      const tunnel = spawn(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodeCommand(command)],
+        { windowsHide: true, stdio: 'ignore' });
+      tunnelExit = childResult(tunnel);
+      await new Promise((resolve, reject) => {
+        tunnel.once('spawn', resolve);
+        tunnel.once('error', reject);
+      });
+      launched = true;
+    } else {
+      const elevation = `try {
+        Start-Process -FilePath ${quote(powershell)} -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','${encodeCommand(command)}') -Verb RunAs -WindowStyle Hidden -ErrorAction Stop
+      } catch { exit 1223 }`;
+      const launcher = spawn(powershell, ['-NoProfile', '-EncodedCommand', encodeCommand(elevation)], { windowsHide: true, stdio: 'ignore' });
+      const code = await childResult(launcher);
+      if (code === 1223) throw new Error('Для системного VPN нужно подтвердить запрос Windows.');
+      if (code !== 0) throw new Error(winError);
+      launched = true;
+    }
     const deadline = Date.now() + 23_000;
     while (Date.now() < deadline && session === current && current.state === 'connecting' && !quitting) {
       const signal = (await fs.readFile(path.join(directory, 'state'), 'utf8').catch(() => '')).trim();
@@ -224,7 +235,9 @@ async function connect({ name, config }) {
         return status();
       }
       if (signal === 'failed') break;
-      await sleep(150);
+      const exited = tunnelExit && await Promise.race([tunnelExit.then(() => true), sleep(150).then(() => false)]);
+      if (exited) break;
+      if (!tunnelExit) await sleep(150);
     }
     throw new Error(winError);
   } catch (error) {
@@ -282,12 +295,16 @@ const actions = {
   bot: () => shell.openExternal('https://t.me/sharesubot'),
 };
 
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!app.requestSingleInstanceLock()) {
+  startupLog('instance-lock-unavailable');
+  app.quit();
+}
 else {
   app.on('second-instance', (_event, args) => {
     const link = args.find(isImportLink);
     if (link) pendingLink = link;
     if (window?.isMinimized()) window.restore();
+    window?.show();
     window?.focus();
   });
   app.whenReady().then(async () => {
@@ -309,8 +326,14 @@ else {
     });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
+    window.webContents.on('render-process-gone', (_event, details) => startupLog('renderer', details.reason));
     window.once('ready-to-show', () => window.show());
     await window.loadURL(origin + '/index.html');
+    if (!window.isDestroyed() && !window.isVisible()) window.show();
+  }).catch(error => {
+    startupLog('startup', error.code || error.name);
+    dialog.showErrorBox('ShareSub', 'Не удалось открыть окно приложения. Диагностика запуска сохранена в папке профиля ShareSub (startup.log).');
+    app.quit();
   });
   app.on('window-all-closed', () => app.quit());
   app.on('before-quit', event => {
