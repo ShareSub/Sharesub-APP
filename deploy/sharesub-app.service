@@ -1,0 +1,20 @@
+[Unit]
+Description=ShareSub download site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sharesub-web
+Group=sharesub-web
+StateDirectory=sharesub-web
+Environment=XDG_DATA_HOME=/var/lib/sharesub-web
+Environment=XDG_CONFIG_HOME=/var/lib/sharesub-web
+ExecStart=/usr/local/bin/sharesub-caddy run --config /etc/sharesub-app/Caddyfile --adapter caddyfile
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

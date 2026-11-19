@@ -1,0 +1,40 @@
+{
+    admin off
+    http_port 9085
+    https_port 9443
+    default_bind 127.0.0.1
+    servers {
+        protocols h1 h2
+    }
+}
+
+app.sharesub.ru {
+    root * /srv/sharesub-app/web
+    encode gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Content-Security-Policy "default-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    }
+    @feed path /api/latest.json /download/* /import /.well-known/assetlinks.json
+    header @feed Cache-Control "no-cache"
+    @release path /releases/*
+    header @release Cache-Control "public, max-age=31536000, immutable"
+    @apk path /download/android /releases/*.apk
+    header @apk Content-Type "application/vnd.android.package-archive"
+    header @apk Content-Disposition "attachment; filename=ShareSub-Android.apk"
+    @exe path /download/windows /releases/*.exe
+    header @exe Content-Type "application/octet-stream"
+    header @exe Content-Disposition "attachment; filename=ShareSub-Windows-x64.exe"
+    handle_path /releases/* {
+        root * /srv/sharesub-app/releases
+        file_server
+    }
+    handle {
+        rewrite /api/latest.json /latest.json
+        rewrite /download/android /latest.apk
+        rewrite /download/windows /latest.exe
+        rewrite /import /import.html
+        file_server
+    }
+}

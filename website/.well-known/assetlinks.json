@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ru.sharesub.vpn",
+      "sha256_cert_fingerprints": ["71:D8:24:15:A4:A0:47:6F:E7:6E:2D:0F:19:F1:9F:BE:E5:FB:47:5F:2F:92:72:D8:09:23:30:41:76:E0:F5:20"]
+    }
+  }
+]

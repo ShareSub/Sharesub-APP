@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="theme-color" content="#fbfbfa">
+  <title>ShareSub</title>
+  <link rel="preload" href="fonts/golos-text.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="shell top-inner">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 16 9 4h5L7 16ZM10 20l7-12h5l-7 12Z"/></svg>
+        <h1>ShareSub</h1>
+      </div>
+      <div class="top-actions">
+        <button id="open-settings" class="icon-button" type="button" aria-label="Настройки" title="Настройки">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/><path class="knobs" d="M9 4v4m6 2v4m-6 2v4"/></svg>
+        </button>
+        <button id="open-import" class="icon-button add-button" type="button" aria-label="Добавить подписку" title="Добавить подписку">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+  <main class="shell workspace">
+    <section class="connection" aria-label="Подключение">
+      <div class="connection-card" id="connection-card" data-state="idle">
+        <div class="state">
+          <span class="route" aria-hidden="true"><i></i><b></b><i></i></span>
+          <span id="vpn-state" role="status">VPN выключен</span>
+        </div>
+        <button class="ping-label" id="ping-one" type="button" title="Обновить пинг" aria-label="Обновить пинг" disabled>
+          <span class="ping-caption">Пинг</span>
+          <span class="ping-reading"><span id="active-ping">—</span><span id="active-ping-unit" hidden> мс</span></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8a8 8 0 1 0 .5 8M19 4v5h-5"/></svg>
+        </button>
+        <div class="chosen">
+          <span class="node-flag chosen-flag" id="active-flag" aria-hidden="true" hidden></span>
+          <span class="chosen-name" id="active-server">Выберите сервер</span>
+        </div>
+        <button id="connect" class="connect-button" type="button" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9M6.2 6.3a8 8 0 1 0 11.6 0"/></svg><span>Подключиться</span>
+        </button>
+        <p id="resources" class="resources" hidden>
+          <span id="memory-reading" title="Память Xray-core">ОЗУ Xray —</span><span id="resource-divider" aria-hidden="true"> · </span><span id="battery-reading">Разряд ≈ — %/ч</span>
+        </p>
+        <p id="vpn-error" class="error" role="alert" hidden></p>
+      </div>
+    </section>
+    <section class="servers" aria-labelledby="servers-title">
+      <div class="list-heading">
+        <h2 id="servers-title">Серверы</h2>
+        <span id="server-count" class="count" hidden></span>
+        <div class="group-actions" id="group-actions" hidden>
+          <button id="expand-groups" type="button" class="secondary">Развернуть все</button>
+          <button id="collapse-groups" type="button" class="secondary">Свернуть все</button>
+        </div>
+      </div>
+      <div class="tools">
+        <label class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+          <input type="search" id="search" placeholder="Поиск" aria-label="Поиск сервера" disabled>
+        </label>
+        <button id="ping-all" class="icon-button" type="button" aria-label="Проверить пинг серверов" title="Проверить пинг серверов" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-6 4 12 3-6h4"/></svg>
+        </button>
+        <button id="refresh" class="icon-button" type="button" aria-label="Обновить подписки" title="Обновить подписки" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8a8 8 0 1 0 .5 8M19 4v5h-5"/></svg>
+        </button>
+      </div>
+      <div class="list-frame">
+        <button id="auto-connect" class="auto-row" type="button" aria-pressed="false" title="Автовыбор сервера из всех подписок" hidden disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h4c4 0 4 12 8 12h4m-4-4 4 4-4 4M4 18h4c4 0 4-12 8-12h4m-4-4 4 4-4 4"/></svg>
+          <span class="auto-label"><strong>Автовыбор</strong><small>Российские сайты напрямую</small></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+        </button>
+        <div id="empty" class="empty">
+          <strong id="empty-title">Пока нет серверов</strong>
+          <span id="empty-hint">Добавьте ссылку на подписку или сервер.</span>
+        </div>
+        <div id="list" class="list" role="listbox" aria-label="Серверы" tabindex="0" hidden>
+          <div id="rows" class="rows" role="presentation"></div>
+        </div>
+      </div>
+      <div class="list-status" id="list-status" role="status" hidden></div>
+    </section>
+  </main>
+  <footer class="shell footer">
+    <button id="bot" type="button" class="bot">
+      @sharesubot <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>
+    </button>
+  </footer>
+  <dialog id="add-dialog" aria-labelledby="add-title">
+    <div class="dialog-body">
+      <div class="dialog-top"><h2 id="add-title">Добавить серверы</h2><button id="close-add" type="button" class="icon-button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <div class="import-options">
+        <button id="paste-import" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3"/><rect x="8" y="3" width="8" height="5" rx="1"/></svg>Вставить из буфера</button>
+        <button id="manual-import" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 7l2-2a4 4 0 0 1 6 6l-2 2m-4 4-2 2a4 4 0 0 1-6-6l2-2m2 4 6-6"/></svg>Ввести ссылку</button>
+        <button id="file-import" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3H6v18h12V8Zm0 0v5h5M9 13h6m-6 4h6"/></svg>Открыть файл Xray JSON</button>
+      </div>
+      <input id="import-file" type="file" accept=".json,.txt,application/json,text/plain" hidden>
+      <p id="add-error" class="error" role="alert" hidden></p>
+    </div>
+  </dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-body">
+      <div class="dialog-top"><h2 id="settings-title">Настройки</h2><button id="close-settings" type="button" class="icon-button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <label class="toggle"><span>Группировать по странам</span><input type="checkbox" role="switch" id="group-setting"></label>
+      <label class="toggle"><span>Автообновления</span><input type="checkbox" role="switch" id="auto-setting" checked></label>
+      <label class="theme-setting"><span>Тема</span>
+        <select id="theme-setting"><option value="light">Светлая</option><option value="dark">Тёмная</option></select>
+      </label>
+      <label class="toggle"><span>Показывать ОЗУ Xray</span><input type="checkbox" role="switch" id="memory-setting" checked></label>
+      <label class="toggle"><span>Показывать разряд батареи</span><input type="checkbox" role="switch" id="battery-setting" checked></label>
+      <section class="providers" aria-labelledby="providers-title">
+        <h3 id="providers-title" tabindex="-1">Провайдеры</h3>
+        <p id="providers-empty" class="providers-empty">Пока нет сохранённых ссылок</p>
+        <ul id="provider-list" class="provider-list"></ul>
+        <p id="provider-status" class="update-state" role="status" hidden></p>
+      </section>
+      <dl class="about">
+        <div><dt>ShareSub</dt><dd id="app-version">—</dd></div>
+        <div><dt>Xray-core</dt><dd id="core-version">—</dd></div>
+      </dl>
+      <button id="check-update" class="secondary" type="button">Проверить обновления</button>
+      <div id="update-state" class="update-state" role="status" hidden></div>
+      <progress id="update-progress" max="100" hidden></progress>
+      <button id="apply-update" class="solid" type="button" hidden>Скачать обновление</button>
+      <p id="settings-error" class="error" role="alert" hidden></p>
+    </div>
+  </dialog>
+  <dialog id="remove-provider-dialog" aria-labelledby="remove-provider-title" aria-describedby="remove-provider-message">
+    <div class="dialog-body">
+      <div class="dialog-top"><h2 id="remove-provider-title">Удалить источник?</h2></div>
+      <p id="remove-provider-message" class="provider-message"></p>
+      <div class="provider-actions">
+        <button id="cancel-provider" class="secondary" type="button" autofocus>Отмена</button>
+        <button id="confirm-provider" class="solid" type="button">Удалить</button>
+      </div>
+      <p id="provider-error" class="error" role="alert" hidden></p>
+    </div>
+  </dialog>
+  <dialog id="import-dialog" aria-labelledby="import-title">
+    <form id="import-form">
+      <div class="dialog-top">
+        <h2 id="import-title">Добавить подписку</h2>
+        <button id="close-import" type="button" class="icon-button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <label for="source">Ссылка или конфигурация Xray JSON</label>
+      <textarea id="source" rows="3" placeholder="https://…" spellcheck="false" autocomplete="off" autocapitalize="off" autofocus required></textarea>
+      <p id="import-error" class="error" role="alert" hidden></p>
+      <button id="import-submit" class="solid" type="submit">Добавить</button>
+    </form>
+  </dialog>
+  <script type="module" src="ui.mjs"></script>
+</body>
+</html>

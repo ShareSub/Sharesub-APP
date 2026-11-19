@@ -1,0 +1,31 @@
+{
+  "name": "sharesub-vpn",
+  "productName": "ShareSub",
+  "version": "1.2.1",
+  "description": "ShareSub VPN with Xray-core",
+  "author": "ShareSub",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "bench": "node scripts/benchmark.mjs",
+    "build:windows": "electron-builder --win nsis --x64",
+    "build:android": "powershell -ExecutionPolicy Bypass -File scripts/build-android.ps1"
+  },
+  "devDependencies": {
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "ru.sharesub.vpn",
+    "artifactName": "ShareSub-${version}-Windows-${arch}.${ext}",
+    "compression": "normal",
+    "files": ["desktop/*.cjs", "desktop/icon.ico", "app/**", "package.json"],
+    "extraResources": [{"from": "vendor/windows", "to": "xray"}, {"from": "desktop/tunnel.ps1", "to": "tunnel.ps1"}],
+    "win": {"target": "nsis", "requestedExecutionLevel": "asInvoker", "icon": "desktop/icon.ico"},
+    "protocols": [{"name": "Импорт в ShareSub", "schemes": ["sharesub"]}],
+    "nsis": {"oneClick": true, "perMachine": false}
+  }
+}
