@@ -2,6 +2,7 @@ import { call } from './bridge.mjs';
 import { flagCodes } from './flag-codes.mjs';
 import { groupedServers } from './group-servers.mjs';
 import { importPayload } from './import-link.mjs';
+import { parseError, readBatches } from './subscriptions.mjs';
 import { balancedTunnelConfig, balancerCandidates, tunnelConfig } from './vpn-config.mjs';
 
 const pageOptions = new URLSearchParams(location.search);
@@ -113,6 +114,8 @@ function pingLabel(key) {
   return typeof value === 'number' ? value + ' мс' : '—';
 }
 
+const profilePing = 'Задержку измеряет Xray внутри профиля';
+
 function redraw() {
   if (list.hidden) {
     rows.replaceChildren();
@@ -192,7 +195,7 @@ function redraw() {
     name.title = entry.display;
     const reading = entry.group ? countFormat.format(entry.count) : probes.get(entry.key) === null ? '—' : pingLabel(entry.key);
     if (readingText.textContent !== reading) readingText.textContent = reading;
-    ping.title = entry.group ? 'Количество серверов' : pingLabel(entry.key);
+    ping.title = entry.group ? 'Количество серверов' : entry.host ? pingLabel(entry.key) : profilePing;
     row.setAttribute('aria-label', entry.group
       ? entry.display + ', серверов ' + reading + (entry.open ? ', раскрыто' : ', свёрнуто')
       : [entry.display, entry.region, ping.title].filter(Boolean).join(', '));
@@ -228,6 +231,7 @@ function updateControls() {
   $('connect').querySelector('span').textContent = active ? 'Отключиться' : 'Подключиться';
   $('connect').disabled = inFlight || (!active && !selected);
   const pool = connectedPool;
+  const profile = selected && !selected.host;
   const selectedName = pool?.display || selected?.display || (active ? vpn.name : '');
   $('active-server').textContent = selectedName || 'Выберите сервер';
   $('active-server').title = selectedName || '';
@@ -246,15 +250,15 @@ function updateControls() {
     }
   }
   $('active-ping-unit').hidden = typeof value !== 'number';
-  $('ping-one').setAttribute('aria-label', pool ? 'Xray проверяет серверы балансера' : 'Обновить пинг. ' + (selected ? pingLabel(selected.key) : 'Пинг неизвестен'));
-  $('ping-one').title = pool ? 'Xray измеряет задержку внутри туннеля' : 'Обновить пинг';
+  $('ping-one').setAttribute('aria-label', pool || profile ? profilePing : 'Обновить пинг. ' + (selected ? pingLabel(selected.key) : 'Пинг неизвестен'));
+  $('ping-one').title = pool || profile ? profilePing : 'Обновить пинг';
   $('ping-one').dataset.pending = value === 'pending';
-  $('ping-one').disabled = Boolean(pool) || !selected || value === 'pending';
+  $('ping-one').disabled = Boolean(pool) || !selected?.host || value === 'pending';
   $('auto-connect').disabled = inFlight || busy || !servers.length;
   $('auto-connect').hidden = !servers.length;
   $('auto-connect').setAttribute('aria-pressed', String(active && connectedKey === automaticKey));
   search.disabled = !servers.length && !search.value;
-  $('ping-all').disabled = pinging || !servers.length;
+  $('ping-all').disabled = pinging || !servers.some(server => server.host);
   $('refresh').disabled = busy || ![...sources.keys()].some(isUrl);
   $('refresh').classList.toggle('working', busy);
   $('open-import').disabled = busy;
@@ -303,7 +307,7 @@ function setAllGroups(open) {
 }
 
 async function checkPing(entry, refresh = false) {
-  if (probes.get(entry.key) === 'pending' || (!refresh && probes.has(entry.key))) return;
+  if (!entry.host || probes.get(entry.key) === 'pending' || (!refresh && probes.has(entry.key))) return;
   probes.set(entry.key, 'pending');
   updateControls();
   try { probes.set(entry.key, await call('ping', { host: entry.host, port: entry.port })); }
@@ -314,9 +318,10 @@ async function checkPing(entry, refresh = false) {
 
 async function pingList() {
   if (pinging) return;
+  const targets = (filteredServers.length ? filteredServers : servers).filter(server => server.host);
+  if (!targets.length) return;
   pinging = true;
   updateControls();
-  const targets = (filteredServers.length ? filteredServers : servers).slice();
   const endpoints = new Map();
   for (const entry of targets) {
     const key = entry.host + ':' + entry.port;
@@ -359,7 +364,7 @@ function addPresentation(batch) {
   for (const item of batch) {
     item.display = item.name
       .replace(/[\u{1f1e6}-\u{1f1ff}]{2}|\p{Extended_Pictographic}|[\u200d\ufe0e\ufe0f\u{1f3fb}-\u{1f3ff}]/gu, '')
-      .replace(/\s+/gu, ' ').trim() || item.host;
+      .replace(/\s+/gu, ' ').trim() || item.host || item.name;
     item.region = item.country ? countryNames.of(item.country) : '';
     item.search = [item.name, item.display, item.country, item.region, item.host].join(' ').toLocaleLowerCase('ru');
   }
@@ -371,12 +376,22 @@ async function load(source, refresh = false, onFirstBatch) {
   const nodes = [];
   const queue = [];
   let ended = false, problem, scheduled = false;
-  const worker = new Worker('parser.worker.mjs', { type: 'module' });
+  let worker, localBatches;
   const finished = new Promise((resolve, reject) => {
     const drain = () => {
       scheduled = false;
       if (problem) { reject(new Error(problem)); return; }
-      const entries = queue.shift();
+      let entries = queue.shift();
+      if (localBatches) {
+        try {
+          const batch = localBatches.next();
+          entries = batch.value;
+          ended = batch.done;
+        } catch (error) {
+          reject(new Error(parseError(error)));
+          return;
+        }
+      }
       if (entries) {
         if (!nodes.length) onFirstBatch?.();
         addPresentation(entries);
@@ -386,9 +401,8 @@ async function load(source, refresh = false, onFirstBatch) {
           rebuild(true);
         }
       }
-      if (queue.length || !ended) {
-        if (queue.length) schedule();
-      } else resolve();
+      if (queue.length || (localBatches && !ended)) schedule();
+      else if (ended) resolve();
     };
     function schedule() {
       if (!scheduled) {
@@ -396,15 +410,24 @@ async function load(source, refresh = false, onFirstBatch) {
         nextPaint(drain);
       }
     }
-    worker.onmessage = ({ data }) => {
-      if (data.type === 'batch') queue.push(data.batch);
-      if (data.type === 'done') ended = true;
-      if (data.type === 'error') problem = data.message;
+    function useLocalParser() {
+      worker?.terminate();
+      if (nodes.length || queue.length) problem = 'Фоновый парсер подписки остановился.';
+      else localBatches = readBatches(text);
       schedule();
-    };
-    worker.onerror = () => { problem = 'Не удалось запустить парсер подписки.'; schedule(); };
+    }
+    try {
+      worker = new Worker('parser.worker.mjs', { type: 'module' });
+      worker.onmessage = ({ data }) => {
+        if (data.type === 'batch') queue.push(data.batch);
+        if (data.type === 'done') ended = true;
+        if (data.type === 'error') problem = data.message;
+        schedule();
+      };
+      worker.onerror = useLocalParser;
+      worker.postMessage({ text });
+    } catch { useLocalParser(); }
   });
-  worker.postMessage({ text });
   try {
     await finished;
     sources.set(source, nodes);
@@ -416,7 +439,7 @@ async function load(source, refresh = false, onFirstBatch) {
     else sources.delete(source);
     rebuild();
     throw error;
-  } finally { worker.terminate(); }
+  } finally { worker?.terminate(); }
 }
 
 function setBusy(value) {
@@ -466,12 +489,15 @@ async function connectTarget(target, poolServers) {
   if (switching) return;
   if (poolServers && !poolServers.length) return;
   const next = vpn.state === 'connected' && target?.key === connectedKey ? null : target;
-  const config = !next ? null : poolServers
-    ? balancedTunnelConfig(balancerCandidates(poolServers, probes), platform, { ruDirect: next.key === automaticKey })
-    : tunnelConfig(next, platform);
   switching = true;
   operationError = '';
   try {
+    let config;
+    if (next && poolServers) {
+      const candidates = balancerCandidates(poolServers, probes);
+      if (!candidates.length) throw new Error('Для балансера нужны отдельные серверы. Можно выбрать готовый профиль из списка.');
+      config = balancedTunnelConfig(candidates, platform, { ruDirect: next.key === automaticKey });
+    } else if (next) config = tunnelConfig(next, platform);
     if (vpn.state === 'connected') {
       renderVpn({ state: 'disconnecting' });
       renderVpn(await call('disconnect'));

@@ -96,14 +96,21 @@ async function download(input) {
   let address;
   try { address = new URL(input); } catch { throw new Error('Некорректная ссылка на подписку.'); }
   const fromShareSub = address.protocol === 'https:' && isShareSub(address.hostname);
-  if (fromShareSub) address.searchParams.set('format', 'base64');
+  const requestedFormat = address.searchParams.get('format');
+  const preferJson = requestedFormat === null || requestedFormat.toLowerCase() === 'xray-json';
+  if (fromShareSub && requestedFormat === null) address.search += (address.search ? '&' : '?') + 'format=xray-json';
   const providerOrigin = address.origin;
   const providerId = fromShareSub ? options.id
     : crypto.createHmac('sha256', options.id).update(providerOrigin).digest('hex');
   const signal = AbortSignal.timeout(22_000);
   for (let redirects = 0; redirects < 6; redirects++) {
     if (!['https:', 'http:'].includes(address.protocol) || address.username || address.password) break;
-    const headers = { 'User-Agent': 'ShareSub/' + app.getVersion() + ' (Windows)', Accept: 'text/plain, application/json, */*' };
+    const userAgent = 'ShareSub/' + app.getVersion() + ' (Windows)';
+    // Some providers negotiate Xray JSON by matching the first user-agent product.
+    const headers = {
+      'User-Agent': preferJson && !isShareSub(address.hostname) ? 'Happ/3.0 ' + userAgent : userAgent,
+      Accept: preferJson ? 'application/json, text/plain;q=0.9, */*;q=0.1' : 'text/plain, application/json, */*',
+    };
     if (address.protocol === 'https:' && (address.origin === providerOrigin || (fromShareSub && isShareSub(address.hostname)))) {
       Object.assign(headers, { 'X-HWID': providerId, 'X-Device-OS': 'Windows', 'X-Ver-OS': os.release(), 'X-Device-Model': 'PC' });
     }

@@ -2,6 +2,10 @@ const MAX_TEXT = 8 * 1024 * 1024;
 const MAX_NODES = 20000;
 const schemePattern = /^(vless|vmess|trojan|ss|hysteria2|hy2):\/\//i;
 const jsonProtocols = new Set(['vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria', 'socks', 'http']);
+const routingProtocols = new Set(['freedom', 'blackhole', 'dns']);
+const clientInbounds = new Set(['http', 'socks', 'mixed', 'tun']);
+const localFields = /^(?:masterKeyLog|certificateFile|keyFile|script)$/i;
+const externalAsset = /^!*(?:ext|ext-ip|ext-domain|ext-site):(?!(?:geoip|geosite)\.dat:)/;
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const hwidDenied = /(?:\bhwid\b|hardware[ _-]+(?:id|identifier))(?=[\s\S]{0,180}(?:unsupported|not[ _-]+supported|disabled|required|missing|invalid|limit|не\s+поддержива|не\s+переда|лимит|требу))|(?:unsupported|not[ _-]+supported|does[ _-]+not[ _-]+support|disabled|required|missing|invalid|limit|не\s+поддержива|не\s+переда|лимит|требу)[\s\S]{0,100}(?:\bhwid\b|hardware[ _-]+(?:id|identifier))/iu;
 const hwidError = 'Провайдер не принял HWID устройства. Проверьте, что ссылка использует HTTPS и в кабинете провайдера есть свободный слот для устройства.';
@@ -170,18 +174,68 @@ function providerDenial(value) {
   return typeof value === 'string' && hwidDenied.test(value.slice(0, 512));
 }
 
+export function outboundEndpoint(outbound) {
+  if (!jsonProtocols.has(outbound?.protocol)) return null;
+  const settings = outbound.settings;
+  const endpoint = settings?.vnext?.[0] ?? settings?.servers?.[0] ?? settings;
+  const host = cleanHost(endpoint?.address);
+  const port = Number(endpoint?.port);
+  return host && !/[\s/@]/.test(host) && validPort(port) ? { host, port } : null;
+}
+
+function portableSettings(config) {
+  const pending = [config];
+  while (pending.length) {
+    for (const [field, value] of Object.entries(pending.pop())) {
+      if (localFields.test(field) || externalAsset.test(field)) return false;
+      if (typeof value === 'string' && externalAsset.test(value)) return false;
+      if (value && typeof value === 'object') pending.push(value);
+    }
+  }
+  return true;
+}
+
+function* jsonProfile(profile, endpoints) {
+  const { outbounds, routing, dns, observatory, burstObservatory, fakedns } = profile;
+  if (outbounds.some(outbound => !jsonProtocols.has(outbound?.protocol) && !routingProtocols.has(outbound?.protocol))) return;
+  const inbounds = Array.isArray(profile.inbounds) ? profile.inbounds.filter(item => clientInbounds.has(item?.protocol)) : [];
+  const sniff = inbounds.find(item => item.sniffing?.enabled)?.sniffing;
+  const sniffing = sniff ? {
+    enabled: true, routeOnly: sniff.routeOnly, destOverride: sniff.destOverride, domainsExcluded: sniff.domainsExcluded,
+  } : undefined;
+  const clientTags = inbounds.map(item => item.tag).filter(tag => typeof tag === 'string' && tag);
+  const safeOutbounds = outbounds.map(({ protocol, tag, settings, streamSettings, proxySettings, mux, sendThrough, targetStrategy }) =>
+    ({ protocol, tag, settings, streamSettings, proxySettings, mux, sendThrough, targetStrategy }));
+  const config = { outbounds: safeOutbounds, routing, dns, observatory, burstObservatory, fakedns: fakedns ?? profile.fakeDns };
+  if (!portableSettings(config) || (sniffing && !portableSettings(sniffing))) return;
+  const { host, port } = endpoints[0];
+  const name = cleanName(profile.remarks || profile.name || outbounds[0].tag, host);
+  const single = endpoints.length === 1 && !routing?.balancers?.length;
+  const key = JSON.stringify([name, config, clientTags, sniffing]);
+  yield {
+    name, country: countryOf(name), key,
+    ...(single ? { host, port } : {}),
+    profile: { config, clientTags, sniffing },
+  };
+}
+
 function* jsonNodes(root) {
   for (const profile of Array.isArray(root) ? root : [root]) {
     const outbounds = profile?.outbounds ?? [profile];
     if (!Array.isArray(outbounds)) continue;
+    if (profile?.outbounds && (profile.routing || profile.dns || profile.observatory || profile.burstObservatory ||
+        profile.fakedns || profile.fakeDns || outbounds.some(outbound => outbound?.proxySettings || outbound?.streamSettings?.sockopt?.dialerProxy))) {
+      const endpoints = outbounds.map(outboundEndpoint).filter(Boolean);
+      if (endpoints.length) yield* jsonProfile(profile, endpoints);
+      continue;
+    }
     for (const outbound of outbounds) {
-      if (!jsonProtocols.has(outbound?.protocol)) continue;
-      const { protocol, settings, streamSettings } = outbound;
-      const endpoint = settings?.vnext?.[0] ?? settings?.servers?.[0] ?? settings;
-      const host = cleanHost(endpoint?.address);
-      const port = Number(endpoint?.port);
-      if (!host || /[\s/@]/.test(host) || !validPort(port)) continue;
-      const config = { protocol, settings, streamSettings };
+      const endpoint = outboundEndpoint(outbound);
+      if (!endpoint) continue;
+      const { protocol, settings, streamSettings, mux, targetStrategy } = outbound;
+      const config = { protocol, settings, streamSettings, mux, targetStrategy };
+      if (!portableSettings(config)) continue;
+      const { host, port } = endpoint;
       yield node(profile.remarks || profile.name || outbound.tag, host, port, config, JSON.stringify(config));
     }
   }
@@ -207,7 +261,9 @@ export function* readNodes(input) {
         for (const line of text.split(/\r?\n|\r/)) {
           try {
             const entry = parseUri(line.trim());
-            if (entry) yield entry;
+            if (entry) {
+              if (!entry.outbound.streamSettings || portableSettings(entry.outbound.streamSettings)) yield entry;
+            }
             else if (providerDenial(line)) rejectedHWID = true;
           }
           catch { /* one invalid link does not stop the import */ }
@@ -225,4 +281,24 @@ export function* readNodes(input) {
     if (seen.size >= MAX_NODES) break;
   }
   if (!seen.size && rejectedHWID) throw new Error(hwidError);
+}
+
+export function* readBatches(text) {
+  let batch = [];
+  let size = 24;
+  let count = 0;
+  for (const server of readNodes(text)) {
+    batch.push(server);
+    count++;
+    if (batch.length < size) continue;
+    yield batch;
+    batch = [];
+    if (count >= 120) size = 96;
+  }
+  if (batch.length) yield batch;
+  if (!count) throw new Error('В подписке нет поддерживаемых серверов.');
+}
+
+export function parseError(error) {
+  return error instanceof SyntaxError ? 'Не удалось прочитать JSON подписки.' : error.message;
 }

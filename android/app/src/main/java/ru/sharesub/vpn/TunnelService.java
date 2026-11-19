@@ -23,11 +23,14 @@ import java.io.InputStream;
 import java.net.InetAddress;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
 
 public class TunnelService extends VpnService {
     private static final String START = "ru.sharesub.vpn.START";
     private static final String STOP = "ru.sharesub.vpn.STOP";
     private static final String DNS = "1.1.1.1";
+    private static final Pattern GEOIP = Pattern.compile("geoip:|(?:ext|ext-ip):geoip\\.dat:");
+    private static final Pattern GEOSITE = Pattern.compile("geosite:|(?:ext|ext-domain|ext-site):geosite\\.dat:");
     private static final ExecutorService CORE = Executors.newSingleThreadExecutor();
     private static volatile String state = "idle";
     private static volatile String activeName;
@@ -138,9 +141,12 @@ public class TunnelService extends VpnService {
             resolverRunning = true;
             JSONObject env = new JSONObject().put("xray.tun.fd", Integer.toString(tun.getFd()));
             File geodata = new File(getFilesDir(), "geodata");
-            JSONObject routing = config.optJSONObject("routing");
-            if (routing != null && routing.toString().contains("\"geoip:ru\"")) {
-                copyGeoData(geodata);
+            String profile = config.toString();
+            boolean needsGeoIp = GEOIP.matcher(profile).find();
+            boolean needsGeoSite = GEOSITE.matcher(profile).find();
+            if (needsGeoIp || needsGeoSite) {
+                if (needsGeoIp) copyGeoData(geodata, "geoip.dat");
+                if (needsGeoSite) copyGeoData(geodata, "geosite.dat");
                 env.put("xray.location.asset", geodata.getAbsolutePath());
             }
             config.put("env", env);
@@ -166,16 +172,16 @@ public class TunnelService extends VpnService {
         }
     }
 
-    private void copyGeoData(File directory) throws IOException {
-        File target = new File(directory, "geoip.dat");
+    private void copyGeoData(File directory, String asset) throws IOException {
+        File target = new File(directory, asset);
         if (target.isFile()) return;
-        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Не удалось подготовить базу российских IP.");
-        File partial = new File(directory, "geoip.dat.part");
-        try (InputStream source = getAssets().open("geoip.dat"); FileOutputStream output = new FileOutputStream(partial)) {
+        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Не удалось подготовить базы маршрутизации Xray.");
+        File partial = new File(directory, asset + ".part");
+        try (InputStream source = getAssets().open(asset); FileOutputStream output = new FileOutputStream(partial)) {
             byte[] buffer = new byte[32768];
             for (int count; (count = source.read(buffer)) != -1;) output.write(buffer, 0, count);
         }
-        if (!partial.renameTo(target)) throw new IOException("Не удалось сохранить базу российских IP.");
+        if (!partial.renameTo(target)) throw new IOException("Не удалось сохранить базу маршрутизации Xray.");
     }
 
     private static void invoke(String method, JSONObject payload) throws Exception {

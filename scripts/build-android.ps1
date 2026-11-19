@@ -9,7 +9,9 @@ if (!$gradle) {
     $gradle = (Get-ChildItem "$env:USERPROFILE/.gradle/wrapper/dists/gradle-8.14-bin" -Recurse -Filter gradle.bat -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 }
 if (!$gradle) { throw 'Install Gradle 8.14 and add it to PATH.' }
-if (!(Test-Path (Join-Path $root 'vendor/android/libXray.aar')) -or !(Test-Path (Join-Path $root 'vendor/android/geodata/geoip.dat'))) {
+if (!(Test-Path (Join-Path $root 'vendor/android/libXray.aar')) -or
+    !(Test-Path (Join-Path $root 'vendor/android/geodata/geoip.dat')) -or
+    !(Test-Path (Join-Path $root 'vendor/android/geodata/geosite.dat'))) {
     & (Join-Path $PSScriptRoot 'fetch-core.ps1') android
 }
 $android = Join-Path $root 'android'

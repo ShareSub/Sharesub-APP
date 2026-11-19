@@ -347,13 +347,11 @@ public class MainActivity extends Activity {
         boolean fromShareSub = isShareSub(address);
         String providerOrigin = origin(address);
         String hwid = fromShareSub ? deviceId : providerId(providerOrigin);
-        if (fromShareSub) {
-            Uri source = Uri.parse(input);
-            Uri.Builder builder = source.buildUpon().clearQuery().fragment(null);
-            for (String key : source.getQueryParameterNames()) {
-                if (!key.equals("format")) for (String value : source.getQueryParameters(key)) builder.appendQueryParameter(key, value);
-            }
-            address = new URL(builder.appendQueryParameter("format", "base64").build().toString());
+        Uri source = Uri.parse(input);
+        String requestedFormat = source.isHierarchical() ? source.getQueryParameter("format") : null;
+        boolean preferJson = requestedFormat == null || requestedFormat.equalsIgnoreCase("xray-json");
+        if (fromShareSub && requestedFormat == null) {
+            address = new URL(source.buildUpon().appendQueryParameter("format", "xray-json").build().toString());
         }
         long deadline = System.nanoTime() + 22_000_000_000L;
         for (int redirects = 0; redirects < 6; redirects++) {
@@ -362,8 +360,9 @@ public class MainActivity extends Activity {
             connection.setInstanceFollowRedirects(false);
             connection.setConnectTimeout(6500);
             connection.setReadTimeout(8000);
-            connection.setRequestProperty("User-Agent", "ShareSub/" + getString(R.string.app_version) + " (Android)");
-            connection.setRequestProperty("Accept", "text/plain, application/json, */*");
+            String userAgent = "ShareSub/" + getString(R.string.app_version) + " (Android)";
+            connection.setRequestProperty("User-Agent", preferJson && !isShareSub(address) ? "Happ/3.0 " + userAgent : userAgent);
+            connection.setRequestProperty("Accept", preferJson ? "application/json, text/plain;q=0.9, */*;q=0.1" : "text/plain, application/json, */*");
             if (address.getProtocol().equals("https") && (providerOrigin.equals(origin(address)) || (fromShareSub && isShareSub(address)))) {
                 connection.setRequestProperty("X-HWID", hwid);
                 connection.setRequestProperty("X-Device-OS", "Android");

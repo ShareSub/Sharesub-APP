@@ -1,3 +1,5 @@
+import { outboundEndpoint } from './subscriptions.mjs';
+
 export const DNS = '1.1.1.1';
 export const MAX_BALANCER_NODES = 24;
 
@@ -24,10 +26,55 @@ function baseTunnelConfig(platform) {
 }
 
 export function tunnelConfig(server, platform) {
-  return { ...baseTunnelConfig(platform), outbounds: [{ ...server.outbound, tag: 'node' }] };
+  const tunnel = baseTunnelConfig(platform);
+  if (!server.profile) return { ...tunnel, outbounds: [{ ...server.outbound, tag: 'node' }] };
+  const { config, clientTags, sniffing } = server.profile;
+  const [inbound] = tunnel.inbounds;
+  if (sniffing) inbound.sniffing = sniffing;
+  const routing = config.routing;
+  const rules = [];
+  for (const rule of Array.isArray(routing?.rules) ? routing.rules : []) {
+    if (!rule || typeof rule !== 'object') continue;
+    if (rule.inboundTag == null) {
+      rules.push(rule);
+      continue;
+    }
+    const tags = Array.isArray(rule.inboundTag) ? rule.inboundTag : String(rule.inboundTag).split(',').map(tag => tag.trim());
+    const mapped = new Set(tags.filter(tag => tag === config.dns?.tag));
+    if (tags.some(tag => clientTags.includes(tag))) mapped.add(inbound.tag);
+    if (mapped.size) rules.push({ ...rule, inboundTag: [...mapped] });
+  }
+  return {
+    ...config,
+    ...tunnel,
+    ...(routing ? { routing: { domainStrategy: routing.domainStrategy, balancers: routing.balancers, rules } } : {}),
+  };
+}
+
+function poolOutbounds(servers) {
+  const candidates = [];
+  const seen = new Set();
+  for (const server of servers) {
+    if (!server.profile) {
+      candidates.push(server);
+      continue;
+    }
+    for (const outbound of server.profile.config.outbounds) {
+      if (outbound.proxySettings || outbound.streamSettings?.sockopt?.dialerProxy) continue;
+      const endpoint = outboundEndpoint(outbound);
+      if (!endpoint) continue;
+      const { tag, ...settings } = outbound;
+      const key = JSON.stringify(settings);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ ...endpoint, key: server.host ? server.key : key, outbound: settings });
+    }
+  }
+  return candidates;
 }
 
 export function balancerCandidates(servers, probes) {
+  servers = poolOutbounds(servers);
   if (servers.length <= MAX_BALANCER_NODES) {
     const best = [...servers].sort((left, right) => pingScore(probes, left) - pingScore(probes, right));
     return best;

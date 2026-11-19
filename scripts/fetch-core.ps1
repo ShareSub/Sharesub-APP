@@ -33,6 +33,6 @@ if ($Platform -in @('android', 'all')) {
     }
     $geo = New-Item -ItemType Directory -Force (Join-Path $dir.FullName 'geodata')
     $geoZip = Fetch-Package 'XTLS/Xray-core' 'Xray-windows-64.zip' '1262522266337B824F07BEB8E1375786B437683B3890105469088F8E17E0A69D'
-    & tar.exe -xf $geoZip -C $geo.FullName geoip.dat
-    if ($LASTEXITCODE) { throw 'Could not extract Xray GeoIP data.' }
+    & tar.exe -xf $geoZip -C $geo.FullName geoip.dat geosite.dat
+    if ($LASTEXITCODE) { throw 'Could not extract Xray GeoIP and GeoSite data.' }
 }
