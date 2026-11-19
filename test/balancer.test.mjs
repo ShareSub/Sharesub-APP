@@ -1,10 +1,22 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { balancedTunnelConfig, balancerCandidates, MAX_BALANCER_NODES } from '../app/vpn-config.mjs';
+import { balancedTunnelConfig, balancerCandidates, isBalancer, MAX_BALANCER_NODES, probeEndpoints } from '../app/vpn-config.mjs';
 
 function node(index, host = 'fixture-' + index + '.invalid') {
   return { key: 'node-' + index, host, port: 443, outbound: { protocol: 'trojan', settings: { servers: [{ address: host, port: 443, password: 'fixture' }] } } };
 }
+
+test('provider balancers and pools sample distinct endpoints with a fixed maximum', () => {
+  const shared = node(1);
+  const outbounds = [shared.outbound, shared.outbound, ...Array.from({ length: 60 }, (_, index) => node(index + 10).outbound)];
+  const profile = { profile: { config: { outbounds, routing: { balancers: [{ tag: 'pool' }] } } } };
+  const endpoints = probeEndpoints([shared, profile]);
+  assert.equal(isBalancer(profile), true);
+  assert.equal(isBalancer(shared), false);
+  assert.equal(endpoints.length, 6);
+  assert.equal(new Set(endpoints.map(endpoint => endpoint.host)).size, 6);
+  assert.deepEqual(probeEndpoints([shared, shared]), [{ host: shared.host, port: shared.port }]);
+});
 
 test('large subscriptions use a bounded pool and preserve enough distinct endpoints', () => {
   const servers = Array.from({ length: 1200 }, (_, index) => node(index, index < 10 ? 'shared.invalid' : undefined));

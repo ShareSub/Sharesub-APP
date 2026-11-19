@@ -3,7 +3,7 @@ import { flagCodes } from './flag-codes.mjs';
 import { groupedServers } from './group-servers.mjs';
 import { importPayload } from './import-link.mjs';
 import { parseError, readBatches } from './subscriptions.mjs';
-import { balancedTunnelConfig, balancerCandidates, tunnelConfig } from './vpn-config.mjs';
+import { balancedTunnelConfig, balancerCandidates, isBalancer, probeEndpoints, tunnelConfig } from './vpn-config.mjs';
 
 const pageOptions = new URLSearchParams(location.search);
 const fontScale = Number(pageOptions.get('fontScale'));
@@ -15,6 +15,8 @@ const list = $('list'), rows = $('rows'), search = $('search'), dialog = $('impo
 const countFormat = new Intl.NumberFormat('ru');
 const countryNames = new Intl.DisplayNames(['ru'], { type: 'region', fallback: 'none' });
 const probes = new Map();
+const endpointProbes = new Map();
+const refreshProbeAge = 5 * 60_000;
 const sources = new Map();
 const rendered = new Map();
 const collapsed = new Set();
@@ -24,11 +26,13 @@ const balanceGlyph = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h
 const automaticKey = 'pool:auto';
 let servers = [], filtered = [], filteredServers = [], selected = null, connectedKey = null;
 let connectedPool = null;
+let connectedPing, measuringTunnel = false, pingSession = 0, nextTunnelPing = 0;
 let position = 0, frame = 0, freshFrom = 0, freshTo = 0, freshUntil = 0;
 let busy = false, pinging = false, switching = false, vpn = { state: 'idle' };
 let operationError = '', platform;
 let rowHeight = 0;
 let grouped = false, automatic = true, queuedLink = '';
+let subscriptionRefreshMinutes = 60, refreshedAt = Date.now(), refreshTimer;
 let update = { state: 'idle' }, checkingUpdate = false, updating = false;
 let savingPreferences = Promise.resolve();
 let theme = 'light', showMemory = true, showBattery = true, metricsSnapshot = {}, metricsRequest = 0;
@@ -80,10 +84,19 @@ function formatError(error) {
 
 function rebuild(animate = false) {
   const previous = filtered.length;
+  const previousServers = servers;
   const query = search.value.trim().toLocaleLowerCase('ru');
   const unique = new Map();
   for (const entries of sources.values()) for (const node of entries) if (!unique.has(node.key)) unique.set(node.key, node);
   servers = [...unique.values()];
+  if (previousServers.some(server => !unique.has(server.key))) {
+    for (const key of probes.keys()) {
+      if (!unique.has(key)) probes.delete(key);
+    }
+  } else if (servers.length !== previousServers.length) {
+    probes.delete(automaticKey);
+    for (const key of probes.keys()) if (key.startsWith('country:')) probes.delete(key);
+  }
   filteredServers = query ? servers.filter(value => value.search.includes(query)) : servers;
   filtered = grouped ? groupedServers(filteredServers, collapsed, Boolean(query)) : filteredServers;
   if (!selected || !unique.has(selected.key)) {
@@ -107,14 +120,17 @@ function rebuild(animate = false) {
   updateControls();
 }
 
-function pingLabel(key) {
-  const value = probes.get(key);
+function pingLabel(value) {
   if (value === 'pending') return '…';
   if (value === null) return 'Нет ответа';
   return typeof value === 'number' ? value + ' мс' : '—';
 }
 
-const profilePing = 'Задержку измеряет Xray внутри профиля';
+const endpointKey = ({ host, port }) => JSON.stringify([host, port]);
+const pingValue = (key) => vpn.state === 'connected' && vpn.tunnelPing && connectedKey === key && connectedPing !== undefined
+  ? connectedPing : probes.get(key);
+const profilePing = 'Задержка HTTP через активный туннель';
+const estimatedPing = 'Минимальная задержка TCP по проверенным серверам пула';
 
 function redraw() {
   if (list.hidden) {
@@ -154,7 +170,7 @@ function redraw() {
         connect = document.createElement('button');
         connect.className = 'secondary group-connect';
         connect.type = 'button';
-        connect.innerHTML = balanceGlyph + '<span>Балансер</span>';
+        connect.innerHTML = balanceGlyph + '<span class="group-connect-label">Балансер</span><span class="group-latency" hidden></span>';
         connect.addEventListener('click', event => {
           event.stopPropagation();
           const group = filtered[Number(row.dataset.index)];
@@ -183,8 +199,13 @@ function redraw() {
       const active = vpn.state === 'connected' && connectedKey === entry.key;
       connect.setAttribute('aria-pressed', String(active));
       const action = active ? 'Отключить балансер' : 'Подключить балансер';
-      connect.setAttribute('aria-label', action + ' · ' + entry.display);
-      connect.title = action + ' · ' + entry.display;
+      const value = pingValue(entry.key);
+      const latency = connect.querySelector('.group-latency');
+      latency.hidden = value == null;
+      latency.textContent = pingLabel(value);
+      const description = action + ' · ' + entry.display + (value == null ? '' : ' · ' + pingLabel(value));
+      connect.setAttribute('aria-label', description);
+      connect.title = description + (value == null ? '' : ' · ' + (active ? profilePing : estimatedPing));
       connect.disabled = switching || busy;
       connect.hidden = !entry.country;
     } else row.setAttribute('aria-selected', String(!connectedPool && selected?.key === entry.key));
@@ -193,9 +214,12 @@ function redraw() {
     setFlag(flag, entry.country);
     if (name.textContent !== entry.display) name.textContent = entry.display;
     name.title = entry.display;
-    const reading = entry.group ? countFormat.format(entry.count) : probes.get(entry.key) === null ? '—' : pingLabel(entry.key);
+    const value = pingValue(entry.key);
+    const reading = entry.group ? countFormat.format(entry.count) : value === null ? '—' : pingLabel(value);
     if (readingText.textContent !== reading) readingText.textContent = reading;
-    ping.title = entry.group ? 'Количество серверов' : entry.host ? pingLabel(entry.key) : profilePing;
+    ping.title = entry.group ? 'Количество серверов' : isBalancer(entry)
+      ? pingLabel(value) + ' · ' + (vpn.tunnelPing && connectedKey === entry.key ? profilePing : estimatedPing)
+      : pingLabel(value);
     row.setAttribute('aria-label', entry.group
       ? entry.display + ', серверов ' + reading + (entry.open ? ', раскрыто' : ', свёрнуто')
       : [entry.display, entry.region, ping.title].filter(Boolean).join(', '));
@@ -231,15 +255,15 @@ function updateControls() {
   $('connect').querySelector('span').textContent = active ? 'Отключиться' : 'Подключиться';
   $('connect').disabled = inFlight || (!active && !selected);
   const pool = connectedPool;
-  const profile = selected && !selected.host;
-  const selectedName = pool?.display || selected?.display || (active ? vpn.name : '');
+  const measuringActive = active && vpn.tunnelPing;
+  const selectedName = active ? vpn.name || pool?.display || selected?.display : selected?.display;
   $('active-server').textContent = selectedName || 'Выберите сервер';
   $('active-server').title = selectedName || '';
   $('active-server').dataset.empty = !selectedName;
   const flagTarget = pool || selected;
   $('active-flag').hidden = !flagTarget;
   if (flagTarget) setFlag($('active-flag'), flagTarget.country);
-  const value = !pool && selected && probes.get(selected.key);
+  const value = measuringActive ? measuringTunnel ? 'pending' : connectedPing : selected && probes.get(selected.key);
   const pingText = typeof value === 'number' ? String(value) : value === 'pending' ? '…' : '—';
   const pingOutput = $('active-ping');
   if (pingOutput.textContent !== pingText) {
@@ -250,15 +274,21 @@ function updateControls() {
     }
   }
   $('active-ping-unit').hidden = typeof value !== 'number';
-  $('ping-one').setAttribute('aria-label', pool || profile ? profilePing : 'Обновить пинг. ' + (selected ? pingLabel(selected.key) : 'Пинг неизвестен'));
-  $('ping-one').title = pool || profile ? profilePing : 'Обновить пинг';
+  const pingDescription = measuringActive ? profilePing : isBalancer(selected) ? estimatedPing : '';
+  $('ping-one').setAttribute('aria-label', 'Обновить пинг. ' + pingLabel(value) + (pingDescription ? '. ' + pingDescription : ''));
+  $('ping-one').title = pingDescription || 'Обновить пинг';
   $('ping-one').dataset.pending = value === 'pending';
-  $('ping-one').disabled = Boolean(pool) || !selected?.host || value === 'pending';
+  $('ping-one').disabled = inFlight || (measuringActive ? measuringTunnel : !selected || value === 'pending');
   $('auto-connect').disabled = inFlight || busy || !servers.length;
   $('auto-connect').hidden = !servers.length;
   $('auto-connect').setAttribute('aria-pressed', String(active && connectedKey === automaticKey));
+  const autoPing = $('auto-ping');
+  const autoValue = pingValue(automaticKey);
+  autoPing.hidden = autoValue == null;
+  autoPing.textContent = pingLabel(autoValue);
+  autoPing.title = active && connectedKey === automaticKey ? profilePing : estimatedPing;
   search.disabled = !servers.length && !search.value;
-  $('ping-all').disabled = pinging || !servers.some(server => server.host);
+  $('ping-all').disabled = pinging || !servers.length;
   $('refresh').disabled = busy || ![...sources.keys()].some(isUrl);
   $('refresh').classList.toggle('working', busy);
   $('open-import').disabled = busy;
@@ -307,49 +337,95 @@ function setAllGroups(open) {
 }
 
 async function checkPing(entry, refresh = false) {
-  if (!entry.host || probes.get(entry.key) === 'pending' || (!refresh && probes.has(entry.key))) return;
+  if (vpn.state === 'connected' && vpn.tunnelPing && connectedKey === entry.key) {
+    return measureTunnelPing(Boolean(refresh));
+  }
+  if (probes.get(entry.key) === 'pending' || (!refresh && probes.has(entry.key))) return;
   probes.set(entry.key, 'pending');
+  if (!pinging) updateControls();
+  const results = await Promise.all(probeEndpoints(entry.group ? entry.servers : [entry])
+    .map(endpoint => pingEndpoint(endpoint, refresh)));
+  const readings = results.filter(value => typeof value === 'number');
+  probes.set(entry.key, readings.length ? Math.min(...readings) : null);
+  if (!pinging) {
+    updateControls();
+    scheduleRows();
+  }
+}
+
+function pingEndpoint(endpoint, refreshFrom) {
+  const key = endpointKey(endpoint);
+  const cached = endpointProbes.get(key);
+  const earliest = typeof refreshFrom === 'number' ? refreshFrom : refreshFrom ? Date.now() : Date.now() - refreshProbeAge;
+  if (cached && (cached.pending || cached.updated >= earliest)) return cached.promise;
+  const result = { pending: true };
+  result.promise = call('ping', endpoint).catch(() => null).then(value => {
+    result.pending = false;
+    result.updated = Date.now();
+    return value;
+  });
+  endpointProbes.set(key, result);
+  if (endpointProbes.size > 24_000) {
+    for (const [key, item] of endpointProbes) {
+      if (!item.pending && Date.now() - item.updated >= refreshProbeAge) endpointProbes.delete(key);
+    }
+  }
+  return result.promise;
+}
+
+async function measureTunnelPing(refresh = false) {
+  if (vpn.state !== 'connected' || !vpn.tunnelPing || measuringTunnel || (!refresh && Date.now() < nextTunnelPing)) return;
+  const session = pingSession;
+  measuringTunnel = true;
+  if (connectedPing === undefined || refresh) connectedPing = 'pending';
   updateControls();
-  try { probes.set(entry.key, await call('ping', { host: entry.host, port: entry.port })); }
-  catch { probes.set(entry.key, null); }
+  scheduleRows();
+  let reading;
+  try { reading = await call('tunnelPing'); } catch { /* next probe can recover */ }
+  if (session !== pingSession) return;
+  measuringTunnel = false;
+  connectedPing = reading ?? null;
+  nextTunnelPing = Date.now() + (reading ? 60_000 : 15_000);
   updateControls();
-  redraw();
+  scheduleRows();
 }
 
 async function pingList() {
   if (pinging) return;
-  const targets = (filteredServers.length ? filteredServers : servers).filter(server => server.host);
+  const targets = (filteredServers.length ? filteredServers : servers).slice();
   if (!targets.length) return;
+  if (servers.length) targets.unshift({ group: true, key: automaticKey, servers });
+  if (grouped) {
+    const countries = new Map();
+    for (const server of servers) {
+      if (!server.country) continue;
+      const entries = countries.get(server.country) ?? [];
+      entries.push(server);
+      countries.set(server.country, entries);
+    }
+    for (const [country, entries] of countries) targets.push({ group: true, key: 'country:' + country, servers: entries });
+  }
   pinging = true;
   updateControls();
-  const endpoints = new Map();
-  for (const entry of targets) {
-    const key = entry.host + ':' + entry.port;
-    const same = endpoints.get(key) ?? [];
-    same.push(entry);
-    endpoints.set(key, same);
-  }
-  const queue = endpoints.values();
+  const queue = targets.values();
+  const started = Date.now();
   let total = 0;
-  let statusFrame = 0;
+  let statusFrame;
   try {
-    await Promise.all(Array.from({ length: 16 }, async () => {
-      for (const entries of queue) {
-        const { host, port } = entries[0];
-        let ping = null;
-        try { ping = await call('ping', { host, port }); } catch { /* unavailable */ }
-        for (const entry of entries) probes.set(entry.key, ping);
-        total += entries.length;
-        if (!statusFrame) statusFrame = requestAnimationFrame(() => {
-          statusFrame = 0;
+    await Promise.all(Array.from({ length: 3 }, async () => {
+      for (const entry of queue) {
+        await checkPing(entry, started);
+        total++;
+        if (!statusFrame) statusFrame = setTimeout(() => {
+          statusFrame = undefined;
           updateControls();
-          redraw();
+          scheduleRows();
           if (!busy) setNotice('Проверка пинга · ' + countFormat.format(total) + ' из ' + countFormat.format(targets.length));
-        });
+        }, 80);
       }
     }));
   } finally {
-    cancelAnimationFrame(statusFrame);
+    clearTimeout(statusFrame);
     pinging = false;
     if (!busy) setNotice();
     updateControls();
@@ -446,6 +522,20 @@ function setBusy(value) {
   busy = value;
   rebuild();
   if (settingsDialog.open) renderProviders();
+  if (!busy) scheduleSubscriptionRefresh();
+}
+
+function scheduleSubscriptionRefresh() {
+  clearTimeout(refreshTimer);
+  if (!subscriptionRefreshMinutes || busy || ![...sources.keys()].some(isUrl)) return;
+  const remaining = refreshedAt + subscriptionRefreshMinutes * 60_000 - Date.now();
+  refreshTimer = setTimeout(() => {
+    if (addDialog.open || dialog.open || removeDialog.open) {
+      refreshTimer = setTimeout(scheduleSubscriptionRefresh, 15_000);
+      return;
+    }
+    refreshAll();
+  }, Math.max(0, remaining));
 }
 
 async function refreshAll() {
@@ -459,6 +549,7 @@ async function refreshAll() {
       try { await load(source, true); } catch (error) { failures.push(formatError(error)); }
     }
   } finally {
+    refreshedAt = Date.now();
     setBusy(false);
     setNotice(failures[0]);
   }
@@ -476,7 +567,14 @@ function renderVpn(next) {
   if (stateChanged) {
     metricsSnapshot = {};
     metricsRequest++;
-    if (next.state === 'connected') refreshMetrics();
+    pingSession++;
+    measuringTunnel = false;
+    connectedPing = undefined;
+    nextTunnelPing = 0;
+    if (next.state === 'connected') {
+      refreshMetrics();
+      measureTunnelPing();
+    }
   }
   if (disconnected) rebuild();
   else {
@@ -507,7 +605,7 @@ async function connectTarget(target, poolServers) {
     connectedKey = next.key;
     connectedPool = poolServers ? next : null;
     renderVpn({ state: 'connecting' });
-    renderVpn(await call('connect', { name: next.display, config }));
+    renderVpn(await call('connect', { name: next.display, config, measureTunnel: Boolean(poolServers) || isBalancer(next) }));
   } catch (error) {
     operationError = formatError(error);
     try { renderVpn(await call('status')); }
@@ -652,6 +750,7 @@ $('import-form').onsubmit = async (event) => {
   const text = field.value.trim();
   const input = importPayload(text) || text;
   if (!input || busy) return;
+  const firstSubscription = isUrl(input) && ![...sources.keys()].some(isUrl);
   setBusy(true);
   $('import-submit').disabled = $('close-import').disabled = true;
   $('import-submit').textContent = 'Загружаем…';
@@ -662,6 +761,7 @@ $('import-form').onsubmit = async (event) => {
       setNotice('Добавляем серверы…');
       dialog.close();
     });
+    if (firstSubscription) refreshedAt = Date.now();
     setNotice();
     try { await call('save', [...sources.keys()]); }
     catch { setNotice('Не удалось сохранить подписку на устройстве.'); }
@@ -682,7 +782,10 @@ $('connect').onclick = toggleVpn;
 $('auto-connect').onclick = () => connectTarget({ key: automaticKey, display: 'Автовыбор' }, servers);
 $('expand-groups').onclick = () => setAllGroups(true);
 $('collapse-groups').onclick = () => setAllGroups(false);
-$('ping-one').onclick = () => { if (selected) checkPing(selected, true); };
+$('ping-one').onclick = () => {
+  if (vpn.state === 'connected' && vpn.tunnelPing) measureTunnelPing(true);
+  else if (selected) checkPing(selected, true);
+};
 $('ping-all').onclick = pingList;
 $('refresh').onclick = refreshAll;
 
@@ -758,6 +861,11 @@ function savePreferences() {
   theme = $('theme-setting').value === 'dark' ? 'dark' : 'light';
   showMemory = $('memory-setting').checked;
   showBattery = $('battery-setting').checked;
+  const minutes = Number($('subscription-refresh-setting').value);
+  if (minutes !== subscriptionRefreshMinutes) {
+    subscriptionRefreshMinutes = minutes;
+    scheduleSubscriptionRefresh();
+  }
   if (groupChanged) {
     list.scrollTop = 0;
     position = 0;
@@ -770,7 +878,7 @@ function savePreferences() {
     if (batteryChanged) delete metricsSnapshot.batteryRate;
     renderMetrics();
   }
-  const desired = { grouped, automatic, theme, showMemory, showBattery };
+  const desired = { grouped, automatic, theme, showMemory, showBattery, subscriptionRefreshMinutes };
   savingPreferences = savingPreferences.then(async () => {
     try {
       if (!await call('preferences', desired)) throw new Error('Не удалось сохранить настройки.');
@@ -785,6 +893,7 @@ $('auto-setting').onchange = savePreferences;
 $('theme-setting').onchange = savePreferences;
 $('memory-setting').onchange = savePreferences;
 $('battery-setting').onchange = savePreferences;
+$('subscription-refresh-setting').onchange = savePreferences;
 
 async function handleDeepLink() {
   if (!platform) return;
@@ -869,6 +978,11 @@ try {
   platform = info.platform;
   grouped = $('group-setting').checked = Boolean(info.grouped);
   automatic = $('auto-setting').checked = info.automatic !== false;
+  const refreshSetting = $('subscription-refresh-setting');
+  if ([...refreshSetting.options].some(option => Number(option.value) === info.subscriptionRefreshMinutes)) {
+    refreshSetting.value = info.subscriptionRefreshMinutes;
+  }
+  subscriptionRefreshMinutes = Number(refreshSetting.value);
   theme = $('theme-setting').value = info.theme === 'dark' ? 'dark' : 'light';
   showMemory = $('memory-setting').checked = info.showMemory !== false;
   showBattery = $('battery-setting').checked = info.showBattery !== false;
@@ -886,10 +1000,19 @@ try {
       try { await load(source); }
       catch (error) { sources.set(source, []); failures.push(formatError(error)); }
     }
+    refreshedAt = Date.now();
     setBusy(false);
     setNotice(failures[0]);
   }
 } catch (error) { setNotice(formatError(error)); }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    scheduleSubscriptionRefresh();
+    measureTunnelPing();
+  }
+});
+window.addEventListener('focus', scheduleSubscriptionRefresh);
 
 setInterval(async () => {
   if (!platform) return;
@@ -902,4 +1025,5 @@ setInterval(async () => {
   }
 }, 1100);
 setInterval(refreshMetrics, 5000);
+setInterval(() => { if (!document.hidden) measureTunnelPing(); }, 15_000);
 setInterval(() => { if (automatic) checkUpdate(true); }, 6 * 60 * 60 * 1000);

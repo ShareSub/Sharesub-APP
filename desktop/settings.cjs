@@ -2,6 +2,10 @@ const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
+function subscriptionRefreshMinutes(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 1440 ? value : 60;
+}
+
 function settingsStore(directory) {
   const file = path.join(directory, 'subscriptions.json');
   let loading, current;
@@ -33,6 +37,7 @@ function settingsStore(directory) {
       sources: Array.isArray(data.sources) ? data.sources.filter(value => typeof value === 'string') : [],
       grouped: Boolean(data.grouped),
       automatic: data.automatic !== false,
+      subscriptionRefreshMinutes: subscriptionRefreshMinutes(data.subscriptionRefreshMinutes),
       theme: data.theme === 'dark' ? 'dark' : 'light',
       showMemory: data.showMemory !== false,
       showBattery: data.showBattery !== false,
@@ -60,4 +65,4 @@ function settingsStore(directory) {
   return { get, update };
 }
 
-module.exports = settingsStore;
+module.exports = Object.assign(settingsStore, { subscriptionRefreshMinutes });

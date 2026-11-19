@@ -1,7 +1,7 @@
 {
   "name": "sharesub-vpn",
   "productName": "ShareSub",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "ShareSub VPN with Xray-core",
   "author": "ShareSub",
   "private": true,

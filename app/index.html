@@ -76,7 +76,7 @@
         <button id="auto-connect" class="auto-row" type="button" aria-pressed="false" title="Автовыбор сервера из всех подписок" hidden disabled>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h4c4 0 4 12 8 12h4m-4-4 4 4-4 4M4 18h4c4 0 4-12 8-12h4m-4-4 4 4-4 4"/></svg>
           <span class="auto-label"><strong>Автовыбор</strong><small>Российские сайты напрямую</small></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+          <span class="auto-tail"><span class="node-ping" id="auto-ping" hidden></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span>
         </button>
         <div id="empty" class="empty">
           <strong id="empty-title">Пока нет серверов</strong>
@@ -110,8 +110,16 @@
     <div class="dialog-body">
       <div class="dialog-top"><h2 id="settings-title">Настройки</h2><button id="close-settings" type="button" class="icon-button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <label class="toggle"><span>Группировать по странам</span><input type="checkbox" role="switch" id="group-setting"></label>
-      <label class="toggle"><span>Автообновления</span><input type="checkbox" role="switch" id="auto-setting" checked></label>
-      <label class="theme-setting"><span>Тема</span>
+      <label class="toggle"><span>Автообновление приложения</span><input type="checkbox" role="switch" id="auto-setting" checked></label>
+      <label class="setting-select"><span>Обновление подписок</span>
+        <select id="subscription-refresh-setting">
+          <option value="15">15 минут</option><option value="30">30 минут</option>
+          <option value="60" selected>1 час</option><option value="120">2 часа</option>
+          <option value="360">6 часов</option><option value="720">12 часов</option>
+          <option value="1440">24 часа</option><option value="0">Вручную</option>
+        </select>
+      </label>
+      <label class="setting-select"><span>Тема</span>
         <select id="theme-setting"><option value="light">Светлая</option><option value="dark">Тёмная</option></select>
       </label>
       <label class="toggle"><span>Показывать ОЗУ Xray</span><input type="checkbox" role="switch" id="memory-setting" checked></label>

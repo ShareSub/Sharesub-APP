@@ -16,6 +16,7 @@ test('starting with existing preferences reads them without rewriting the profil
   assert.equal(result.id, existing.id);
   assert.deepEqual(result.sources, existing.sources);
   assert.equal(result.theme, 'dark');
+  assert.equal(result.subscriptionRefreshMinutes, 60);
   assert.equal((await stat(file)).mtimeMs, before.mtimeMs);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), existing);
 });
@@ -28,10 +29,11 @@ test('startup succeeds when a stale temporary file exists and updates are serial
   const store = settingsStore(dir);
   const [first, second] = await Promise.all([store.get(), store.get()]);
   assert.equal(first.id, second.id);
-  await Promise.all([store.update({ theme: 'dark' }), store.update({ sources: ['https://example.invalid/test'] })]);
+  await Promise.all([store.update({ theme: 'dark', subscriptionRefreshMinutes: 30 }), store.update({ sources: ['https://example.invalid/test'] })]);
   const reopened = await settingsStore(dir).get();
   assert.equal(reopened.id, first.id);
   assert.equal(reopened.theme, 'dark');
+  assert.equal(reopened.subscriptionRefreshMinutes, 30);
   assert.deepEqual(reopened.sources, ['https://example.invalid/test']);
   assert.equal(await readFile(legacyTemporary, 'utf8'), 'stale');
 });

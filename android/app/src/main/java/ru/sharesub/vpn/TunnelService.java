@@ -37,6 +37,7 @@ public class TunnelService extends VpnService {
     private static volatile String lastError;
     private static volatile TunnelService activeService;
     private static volatile CoreMemory memory;
+    private static volatile TunnelProbe probe;
     private static boolean protectorRegistered;
     private static JSONObject pending;
     private static Result onConnect;
@@ -52,11 +53,19 @@ public class TunnelService extends VpnService {
         return current != null && state.equals("connected") ? current.sample() : null;
     }
 
+    static Long tunnelPing() {
+        TunnelProbe current = probe;
+        if (current == null || !state.equals("connected")) return null;
+        Long ping = current.measure();
+        return probe == current && state.equals("connected") ? ping : null;
+    }
+
     static JSONObject status() {
         JSONObject value = new JSONObject();
         try {
             value.put("state", state);
             value.put("name", activeName);
+            value.put("tunnelPing", probe != null);
             value.put("error", lastError);
         } catch (Exception ignored) { }
         return value;
@@ -150,6 +159,7 @@ public class TunnelService extends VpnService {
                 env.put("xray.location.asset", geodata.getAbsolutePath());
             }
             config.put("env", env);
+            TunnelProbe newProbe = options.optBoolean("measureTunnel") ? new TunnelProbe(config) : null;
             JSONObject measured = new JSONObject(config.toString());
             CoreMemory newMemory = null;
             try {
@@ -161,6 +171,7 @@ public class TunnelService extends VpnService {
             }
             coreRunning = true;
             memory = newMemory;
+            probe = newProbe;
             activeName = options.getString("name");
             finishStart(null);
             getSystemService(NotificationManager.class).notify(5401, notification(activeName));
@@ -201,6 +212,7 @@ public class TunnelService extends VpnService {
 
     private void cleanup() {
         memory = null;
+        probe = null;
         if (coreRunning) {
             try { invoke("stopXray", null); } catch (Exception | LinkageError ignored) { }
             coreRunning = false;

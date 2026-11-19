@@ -275,6 +275,8 @@ svg {
 .auto-label { display: grid; gap: 3px; overflow-wrap: anywhere; }
 .auto-label strong { font-size: .9375rem; font-weight: 600; }
 .auto-label small { font-size: .75rem; color: var(--muted); }
+.auto-tail { display: flex; align-items: center; gap: 8px; }
+.auto-tail .node-ping { min-inline-size: 0; white-space: nowrap; }
 .list {
   flex: 1 0 0;
   contain: size;
@@ -326,6 +328,8 @@ svg {
 .row[data-group="true"] { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .group-connect { min-block-size: 44px; min-inline-size: 44px; gap: 6px; padding-inline: 8px; font-size: .75rem; }
 .group-connect svg { inline-size: 1rem; block-size: 1rem; }
+.group-connect .group-latency { white-space: nowrap; }
+.group-connect:has(.group-latency:not([hidden])) .group-connect-label { display: none; }
 .group-tail.node-ping { min-inline-size: 0; }
 .row.fresh { animation: arrive 240ms var(--ease) both; animation-delay: var(--delay, 0ms); }
 .node-flag {
@@ -423,12 +427,12 @@ textarea {
   transition: background-color var(--fast) var(--ease);
 }
 .import-options button:hover { background-color: var(--panel); }
-.toggle, .theme-setting { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; min-block-size: var(--control); border-bottom: 1px solid var(--rule); padding-block-end: 6px; }
+.toggle, .setting-select { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; min-block-size: var(--control); border-bottom: 1px solid var(--rule); padding-block-end: 6px; }
 .toggle input { appearance: none; inline-size: 38px; block-size: 23px; border: 1px solid var(--switch-edge); background: var(--panel); border-radius: 20px; margin: 0; cursor: pointer; transition: background-color 180ms var(--ease); }
 .toggle input::before { content: ""; display: block; margin: 3px; inline-size: 15px; block-size: 15px; border-radius: 50%; background: var(--switch); transition: transform 180ms var(--ease), background-color 180ms var(--ease); }
 .toggle input:checked { background: var(--primary); border-color: var(--primary); }
 .toggle input:checked::before { background: var(--on-primary); transform: translateX(15px); }
-.theme-setting select { min-block-size: 44px; max-inline-size: 100%; font-size: .875rem; border: 1px solid var(--rule); border-radius: 8px; padding: 6px 8px; background: var(--surface); }
+.setting-select select { min-block-size: 44px; max-inline-size: 100%; font-size: .875rem; border: 1px solid var(--rule); border-radius: 8px; padding: 6px 8px; background: var(--surface); }
 .providers, .provider-list { display: grid; gap: 6px; min-inline-size: 0; }
 .providers { padding-block: 4px 8px; border-bottom: 1px solid var(--rule); }
 .providers h3 { margin: 0; font-size: .9375rem; font-weight: 600; }
@@ -465,7 +469,7 @@ progress { accent-color: var(--ink); inline-size: 100%; }
   .row { gap: 8px; padding-inline: 12px; }
   .tools .icon-button { inline-size: clamp(44px, 13vw, var(--control)); }
   .top-actions .icon-button { inline-size: clamp(44px, 13vw, var(--control)); min-block-size: clamp(44px, 13vw, var(--control)); }
-  .group-connect span { display: none; }
+  .group-connect .group-connect-label { display: none; }
   .group-actions { margin-inline-start: 0; }
 }
 @media (max-width: 21em) {

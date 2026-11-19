@@ -3,6 +3,25 @@ import { outboundEndpoint } from './subscriptions.mjs';
 export const DNS = '1.1.1.1';
 export const MAX_BALANCER_NODES = 24;
 
+export function isBalancer(server) {
+  return Boolean(server?.profile?.config.routing?.balancers?.length || server?.profile && !server.host);
+}
+
+export function probeEndpoints(servers, limit = 6) {
+  const endpoints = new Map();
+  for (const server of servers) {
+    const candidates = server.host ? [server] : (server.profile?.config.outbounds ?? []).map(outboundEndpoint);
+    for (const entry of candidates) {
+      if (!entry) continue;
+      const { host, port } = entry;
+      endpoints.set(JSON.stringify([host, port]), { host, port });
+    }
+  }
+  const values = [...endpoints.values()];
+  return values.length <= limit ? values
+    : Array.from({ length: limit }, (_, index) => values[Math.floor(index * values.length / limit)]);
+}
+
 function baseTunnelConfig(platform) {
   const windows = platform === 'windows';
   return {

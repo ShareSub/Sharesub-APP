@@ -192,6 +192,7 @@ public class MainActivity extends Activity {
                                 .put("version", version()).put("coreVersion", loadCoreVersion())
                                 .put("grouped", preferences.getBoolean("grouped", false))
                                 .put("automatic", preferences.getBoolean("automatic", true))
+                                .put("subscriptionRefreshMinutes", preferences.getInt("subscriptionRefreshMinutes", 60))
                                 .put("theme", preferences.getString("theme", "light"))
                                 .put("showMemory", preferences.getBoolean("showMemory", true))
                                 .put("showBattery", preferences.getBoolean("showBattery", true))
@@ -200,8 +201,10 @@ public class MainActivity extends Activity {
                         case "preferences":
                             JSONObject options = new JSONObject(input);
                             String appearance = "dark".equals(options.optString("theme")) ? "dark" : "light";
+                            int minutes = options.optInt("subscriptionRefreshMinutes", 60);
                             boolean savedPreferences = preferences.edit().putBoolean("grouped", options.optBoolean("grouped"))
                                 .putBoolean("automatic", options.optBoolean("automatic", true)).putString("theme", appearance)
+                                .putInt("subscriptionRefreshMinutes", minutes >= 0 && minutes <= 1440 ? minutes : 60)
                                 .putBoolean("showMemory", options.optBoolean("showMemory", true))
                                 .putBoolean("showBattery", options.optBoolean("showBattery", true)).commit();
                             if (savedPreferences) runOnUiThread(() -> applyTheme(appearance));
@@ -241,6 +244,9 @@ public class MainActivity extends Activity {
                             break;
                         case "ping":
                             resolve(id, ping(new JSONObject(input)));
+                            break;
+                        case "tunnelPing":
+                            resolve(id, TunnelService.tunnelPing());
                             break;
                         default:
                             reject(id, "Команда не поддерживается.");

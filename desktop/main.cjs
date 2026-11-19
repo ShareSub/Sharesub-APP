@@ -2,6 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, net, powerMonitor, proto
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
+const http = require('node:http');
 const { appendFileSync, mkdirSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -173,6 +174,45 @@ function ping({ host, port }) {
   });
 }
 
+async function installTunnelProbe(config) {
+  const [tun] = config.inbounds;
+  const tag = crypto.randomUUID();
+  const password = crypto.randomBytes(24).toString('hex');
+  const listener = socket.createServer();
+  const port = await new Promise((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(0, '127.0.0.1', () => {
+      const { port } = listener.address();
+      listener.close(() => resolve(port));
+    });
+  });
+  config.inbounds.push({ tag, listen: '127.0.0.1', port, protocol: 'http',
+    settings: { accounts: [{ user: 'sharesub', pass: password }] }, sniffing: tun.sniffing });
+  for (const rule of config.routing?.rules ?? []) {
+    if (Array.isArray(rule.inboundTag) && rule.inboundTag.includes(tun.tag)) rule.inboundTag.push(tag);
+  }
+  return { port, password };
+}
+
+function tunnelPing() {
+  const current = session;
+  if (current?.state !== 'connected' || !current.probe) return null;
+  const { port, password } = current.probe;
+  return new Promise(resolve => {
+    const start = performance.now();
+    const request = http.get({
+      host: '127.0.0.1', port, path: 'http://cp.cloudflare.com/generate_204', agent: false,
+      headers: { Host: 'cp.cloudflare.com', 'Proxy-Authorization': 'Basic ' + Buffer.from('sharesub:' + password).toString('base64') },
+    }, response => {
+      response.destroy();
+      resolve(response.statusCode === 204 && session === current ? Math.max(1, Math.round(performance.now() - start)) : null);
+    });
+    const deadline = setTimeout(() => request.destroy(new Error('Probe timed out')), 6500);
+    request.once('error', () => resolve(null));
+    request.once('close', () => clearTimeout(deadline));
+  });
+}
+
 function childResult(child) {
   return new Promise(resolve => {
     child.once('error', () => resolve(-1));
@@ -193,12 +233,12 @@ async function status() {
       lastError = 'Туннель Xray остановился.';
       session = null;
     }
-    if (session === current) return { state: current.state, name: current.name };
+    if (session === current) return { state: current.state, name: current.name, tunnelPing: Boolean(current.probe) };
   }
   return { state: 'idle', error: lastError };
 }
 
-async function connect({ name, config }) {
+async function connect({ name, config, measureTunnel }) {
   if (session || process.platform !== 'win32') throw new Error('Туннель уже запущен или недоступен на этой платформе.');
   if (typeof name !== 'string' || config?.inbounds?.[0]?.protocol !== 'tun') throw new Error('Некорректная конфигурация.');
   const resources = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'vendor');
@@ -211,6 +251,7 @@ async function connect({ name, config }) {
   session = current;
   let launched = false;
   try {
+    if (measureTunnel === true) current.probe = await installTunnelProbe(config);
     await fs.writeFile(path.join(directory, 'config.json'), JSON.stringify(config), { mode: 0o600 });
     const command = '& ' + [script, binary, directory, process.pid].map(quote).join(' ');
     let tunnelExit;
@@ -276,12 +317,14 @@ const actions = {
   init: async () => {
     const saved = await getSettings();
     return { platform: 'windows', sources: saved.sources, grouped: saved.grouped, automatic: saved.automatic,
+      subscriptionRefreshMinutes: saved.subscriptionRefreshMinutes,
       version: app.getVersion(), coreVersion: await coreVersion(), vpn: await status(),
       theme: saved.theme, showMemory: saved.showMemory, showBattery: saved.showBattery };
   },
-  preferences: async ({ grouped, automatic, theme, showMemory, showBattery }) => {
+  preferences: async ({ grouped, automatic, theme, showMemory, showBattery, subscriptionRefreshMinutes }) => {
     const appearance = theme === 'dark' ? 'dark' : 'light';
     await updateSettings({ grouped: Boolean(grouped), automatic: Boolean(automatic), theme: appearance,
+      subscriptionRefreshMinutes: settingsStore.subscriptionRefreshMinutes(subscriptionRefreshMinutes),
       showMemory: showMemory !== false, showBattery: showBattery !== false });
     window?.setBackgroundColor(appearance === 'dark' ? '#151515' : '#fbfbfa');
     return true;
@@ -298,7 +341,7 @@ const actions = {
     await updateSettings({ sources });
     return true;
   },
-  subscription: download, ping, status, connect, disconnect,
+  subscription: download, ping, tunnelPing, status, connect, disconnect,
   bot: () => shell.openExternal('https://t.me/sharesubot'),
 };
 
