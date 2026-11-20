@@ -1,7 +1,7 @@
 {
   "name": "sharesub-vpn",
   "productName": "ShareSub",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "ShareSub VPN with Xray-core",
   "author": "ShareSub",
   "private": true,
@@ -26,6 +26,6 @@
     "extraResources": [{"from": "vendor/windows", "to": "xray"}, {"from": "desktop/tunnel.ps1", "to": "tunnel.ps1"}],
     "win": {"target": "nsis", "requestedExecutionLevel": "requireAdministrator", "icon": "desktop/icon.ico"},
     "protocols": [{"name": "Импорт в ShareSub", "schemes": ["sharesub"]}],
-    "nsis": {"oneClick": true, "perMachine": false}
+    "nsis": {"oneClick": true, "perMachine": false, "include": "desktop/installer.nsh"}
   }
 }

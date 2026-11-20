@@ -22,6 +22,21 @@ test('import links unwrap ShareSub and Android links without admitting unrelated
   assert.equal(importPayload('sharesub://import?url=' + encoded), source);
   assert.equal(importPayload('https://app.sharesub.ru/import?url=' + encoded), source);
   assert.equal(importPayload('sharesub://add/' + encoded), source);
+  assert.equal(importPayload('happ://add/' + encoded), source);
+  assert.equal(importPayload('sharesub://importer?url=' + encoded), '');
+  assert.equal(importPayload('sharesub://import@another-host?url=' + encoded), '');
   assert.equal(importPayload('https://app.sharesub.ru.example/import?url=' + encoded), '');
   assert.equal(importPayload('sharesub://import?url=file%3A%2F%2F%2Ftmp%2Ftest'), '');
+});
+
+test('ShareSub launcher and subscription pages are converted to the subscription feed', () => {
+  const token = 'abcDE1234_5678-fgh';
+  const feed = 'https://sub.sharesub.ru/' + token;
+  const launcher = 'https://sub.sharesub.ru/launch/sharesub/' + token + '?source=browser';
+  assert.equal(importPayload(launcher), feed);
+  assert.equal(importPayload('https://sub.sharesub.ru/subscription/' + token + '/'), feed);
+  assert.equal(importPayload('sharesub://import?url=' + encodeURIComponent(launcher)), feed);
+  assert.equal(importPayload('https://sub.sharesub.ru.example/launch/sharesub/' + token), '');
+  assert.equal(importPayload('https://sub.sharesub.ru/launch/happ/' + token), '');
+  assert.equal(importPayload('https://sub.sharesub.ru/launch/sharesub/short'), '');
 });

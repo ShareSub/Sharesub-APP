@@ -70,6 +70,7 @@ npm run bench -- "путь-к-файлу-подписки"
 ## Интеграция
 
 - Диплинк для Android и Windows — `sharesub://import?url=<urlencoded>`.
+- Ссылку на страницу `https://sub.sharesub.ru/launch/sharesub/<токен>` также можно вставить в окно импорта.
 - HTTPS-вариант — `https://app.sharesub.ru/import?url=<urlencoded>`.
 - [Манифест обновлений](https://app.sharesub.ru/api/latest.json) содержит актуальную версию, ссылки, размеры и SHA‑256 установщиков.
 - [Технические заметки](docs/technical.md) описывают HWID, измерения, структуру проекта и публикацию сборок.
